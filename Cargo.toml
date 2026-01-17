@@ -1,0 +1,19 @@
+[package]
+name = "dbconnect"
+version = "0.1.0"
+edition = "2021"
+resolver = "2"
+
+[[bin]]
+name = "movies"
+path = "api/movies.rs"
+
+[dependencies]
+vercel_runtime = "2.1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
+axum = "0.7"
+tower-http = { version = "0.5", features = ["fs"] }
+dotenv = "0.15"

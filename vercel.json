@@ -1,0 +1,10 @@
+  {
+    "version": 2,
+    "cleanUrls": true,
+    "rewrites": [
+      { "source": "/api/(.*)", "destination": "/api/$1" },
+      { "source": "/movies", "destination": "/movies.html" },
+      { "source": "/about", "destination": "/about.html" },
+      { "source": "/(.*)", "destination": "/index.html" }
+    ]
+  }

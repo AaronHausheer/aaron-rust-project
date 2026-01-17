@@ -1,0 +1,7 @@
+
+/target
+.shuttle*
+Secrets*.toml
+
+.vercel
+.env*.local
