@@ -1,8 +1,6 @@
 use vercel_runtime::{run, service_fn, Body, Error, Request};
 use serde_json::{json, Value}; // JSON macro and type live here
 use std::env;
-//use serde_json::Value::String;
-use std::string::String;
 
 #[path = "../src/movie.rs"]
 mod movie;
