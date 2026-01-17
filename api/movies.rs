@@ -1,4 +1,4 @@
-use vercel_runtime::{run, service_fn, Error, Request};
+use vercel_runtime::{run, service_fn, Body, Error, Request};
 use serde_json::{json, Value}; // JSON macro and type live here
 use std::env;
 //use serde_json::Value::String;
@@ -194,10 +194,12 @@ pub async fn handler(req: Request) -> Result<Value, Error> {
 }
 
 fn extract_body_json(req: &Request) -> Result<Value, Error> {
-    let body = req.body();
-    if body.is_empty() {
-        return Ok(json!({}));
+    match req.body() {
+        Body::Empty => Ok(json!({})),
+        Body::Text(text) => Ok(serde_json::from_str(text).unwrap_or_else(|_| json!({}))),
+        Body::Binary(bytes) => {
+            let text = String::from_utf8_lossy(bytes);
+            Ok(serde_json::from_str(&text).unwrap_or_else(|_| json!({})))
+        }
     }
-    let text = String::from_utf8_lossy(body);
-    Ok(serde_json::from_str(&text).unwrap_or_else(|_| json!({})))
 }
