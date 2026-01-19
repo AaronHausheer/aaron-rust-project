@@ -1,6 +1,9 @@
-use vercel_runtime::{run, service_fn, Body, Error, Request};
+use vercel_runtime::{run, service_fn, Error, Request};
 use serde_json::{json, Value}; // JSON macro and type live here
+use serde::{Deserialize, Serialize};
 use std::env;
+//use serde_json::Value::String;
+use std::string::String;
 
 #[path = "../src/movie.rs"]
 mod movie;
@@ -34,8 +37,6 @@ pub async fn handler(req: Request) -> Result<Value, Error> {
     }
 
 
-    let client = reqwest::Client::new();
-
     // Query parsing
     let uri_string = req.uri().to_string();
     let query_parts: std::collections::HashMap<String, String> = uri_string
@@ -53,151 +54,42 @@ pub async fn handler(req: Request) -> Result<Value, Error> {
         })
         .collect();
 
-    let method = req.method().as_str();
-    match method {
-        "GET" => {
-            let search_term = query_parts.get("query").cloned().unwrap_or_default();
-            let page: usize = query_parts.get("page").and_then(|p| p.parse().ok()).unwrap_or(0);
+    let search_term = query_parts.get("query").cloned().unwrap_or_default();
+    let page: usize = query_parts.get("page").and_then(|p| p.parse().ok()).unwrap_or(0);
 
-            let items_per_page = 8;
-            let from = page * items_per_page;
-            let to = from + items_per_page - 1;
+    let items_per_page = 8;
+    let from = page * items_per_page;
+    let to = from + items_per_page - 1;
 
-            let mut target_url = format!("{}/rest/v1/movies?select=*", supabase_url);
-            if !search_term.is_empty() {
-                target_url.push_str(&format!("&title=ilike.*{}*", search_term));
-            }
-            target_url.push_str("&order=release_date.desc");
-
-            let res = client
-                .get(target_url)
-                .header("apikey", &supabase_key)
-                .header("Authorization", format!("Bearer {}", supabase_key))
-                .header("Range", format!("{}-{}", from, to))
-                .header("Prefer", "count=exact")
-                .send()
-                .await?;
-
-            let total_count = res
-                .headers()
-                .get("content-range")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.split('/').last())
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "0".to_string());
-
-            let movies: Vec<Movie> = res.json().await?;
-
-            // In Vercel v2, simply return the json! macro result.
-            // The runtime automatically turns this into a 200 OK Response.
-            Ok(json!({
-                "movies": movies,
-                "total": total_count.parse::<usize>().unwrap_or(0)
-            }))
-        }
-        "POST" => {
-            let payload = extract_body_json(&req)?;
-            let res = client
-                .post(format!("{}/rest/v1/movies", supabase_url))
-                .header("apikey", &supabase_key)
-                .header("Authorization", format!("Bearer {}", supabase_key))
-                .header("Content-Type", "application/json")
-                .header("Prefer", "return=representation")
-                .json(&payload)
-                .send()
-                .await?;
-
-            let status = res.status();
-            if !status.is_success() {
-                let details = res.text().await.unwrap_or_default();
-                return Ok(json!({
-                    "error": "Failed to add movie",
-                    "details": details
-                }));
-            }
-
-            let inserted: Vec<Movie> = res.json().await.unwrap_or_default();
-            Ok(json!({
-                "movie": inserted.into_iter().next(),
-                "status": "created"
-            }))
-        }
-        "PATCH" => {
-            let id = query_parts.get("id").cloned().unwrap_or_default();
-            if id.is_empty() {
-                return Ok(json!({
-                    "error": "Missing id parameter"
-                }));
-            }
-            let payload = extract_body_json(&req)?;
-            let target_url = format!("{}/rest/v1/movies?id=eq.{}", supabase_url, id);
-            let res = client
-                .patch(target_url)
-                .header("apikey", &supabase_key)
-                .header("Authorization", format!("Bearer {}", supabase_key))
-                .header("Content-Type", "application/json")
-                .header("Prefer", "return=representation")
-                .json(&payload)
-                .send()
-                .await?;
-
-            let status = res.status();
-            if !status.is_success() {
-                let details = res.text().await.unwrap_or_default();
-                return Ok(json!({
-                    "error": "Failed to update movie",
-                    "details": details
-                }));
-            }
-
-            let updated: Vec<Movie> = res.json().await.unwrap_or_default();
-            Ok(json!({
-                "movie": updated.into_iter().next(),
-                "status": "updated"
-            }))
-        }
-        "DELETE" => {
-            let id = query_parts.get("id").cloned().unwrap_or_default();
-            if id.is_empty() {
-                return Ok(json!({
-                    "error": "Missing id parameter"
-                }));
-            }
-            let target_url = format!("{}/rest/v1/movies?id=eq.{}", supabase_url, id);
-            let res = client
-                .delete(target_url)
-                .header("apikey", &supabase_key)
-                .header("Authorization", format!("Bearer {}", supabase_key))
-                .header("Prefer", "return=representation")
-                .send()
-                .await?;
-
-            let status = res.status();
-            if !status.is_success() {
-                let details = res.text().await.unwrap_or_default();
-                return Ok(json!({
-                    "error": "Failed to delete movie",
-                    "details": details
-                }));
-            }
-
-            Ok(json!({
-                "status": "deleted"
-            }))
-        }
-        _ => Ok(json!({
-            "error": "Unsupported method"
-        })),
+    let mut target_url = format!("{}/rest/v1/movies?select=*", supabase_url);
+    if !search_term.is_empty() {
+        target_url.push_str(&format!("&title=ilike.*{}*", search_term));
     }
-}
+    target_url.push_str("&order=release_date.desc");
 
-fn extract_body_json(req: &Request) -> Result<Value, Error> {
-    match req.body() {
-        Body::Empty => Ok(json!({})),
-        Body::Text(text) => Ok(serde_json::from_str(text).unwrap_or_else(|_| json!({}))),
-        Body::Binary(bytes) => {
-            let text = String::from_utf8_lossy(bytes);
-            Ok(serde_json::from_str(&text).unwrap_or_else(|_| json!({})))
-        }
-    }
+    let client = reqwest::Client::new();
+    let res = client
+        .get(target_url)
+        .header("apikey", &supabase_key)
+        .header("Authorization", format!("Bearer {}", supabase_key))
+        .header("Range", format!("{}-{}", from, to))
+        .header("Prefer", "count=exact")
+        .send()
+        .await?;
+
+    let total_count = res.headers()
+        .get("content-range")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split('/').last())
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "0".to_string());
+
+    let movies: Vec<Movie> = res.json().await?;
+
+    // In Vercel v2, simply return the json! macro result.
+    // The runtime automatically turns this into a 200 OK Response.
+    Ok(json!({
+        "movies": movies,
+        "total": total_count.parse::<usize>().unwrap_or(0)
+    }))
 }
