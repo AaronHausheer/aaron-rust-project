@@ -1,13 +1,30 @@
-use vercel_runtime::{run, service_fn, Error, Request};
+use http::Method;
+use http_body_util::BodyExt;
+use serde::Deserialize;
 use serde_json::{json, Value}; // JSON macro and type live here
-use serde::{Deserialize, Serialize};
 use std::env;
-//use serde_json::Value::String;
 use std::string::String;
+use vercel_runtime::{run, service_fn, Error, Request};
 
 #[path = "../src/movie.rs"]
 mod movie;
 use movie::Movie;
+
+#[derive(Debug, Deserialize)]
+struct MovieInput {
+    title: String,
+    tagline: Option<String>,
+    popularity: Option<f64>,
+    release_date: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MovieUpdate {
+    title: Option<String>,
+    tagline: Option<String>,
+    popularity: Option<f64>,
+    release_date: Option<String>,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -54,42 +71,174 @@ pub async fn handler(req: Request) -> Result<Value, Error> {
         })
         .collect();
 
-    let search_term = query_parts.get("query").cloned().unwrap_or_default();
-    let page: usize = query_parts.get("page").and_then(|p| p.parse().ok()).unwrap_or(0);
-
-    let items_per_page = 8;
-    let from = page * items_per_page;
-    let to = from + items_per_page - 1;
-
-    let mut target_url = format!("{}/rest/v1/movies?select=*", supabase_url);
-    if !search_term.is_empty() {
-        target_url.push_str(&format!("&title=ilike.*{}*", search_term));
-    }
-    target_url.push_str("&order=release_date.desc");
-
     let client = reqwest::Client::new();
-    let res = client
-        .get(target_url)
-        .header("apikey", &supabase_key)
-        .header("Authorization", format!("Bearer {}", supabase_key))
-        .header("Range", format!("{}-{}", from, to))
-        .header("Prefer", "count=exact")
-        .send()
-        .await?;
 
-    let total_count = res.headers()
-        .get("content-range")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split('/').last())
-        .map(|v| v.to_string())
-        .unwrap_or_else(|| "0".to_string());
+    match *req.method() {
+        Method::GET => {
+            let search_term = query_parts.get("query").cloned().unwrap_or_default();
+            let page: usize = query_parts.get("page").and_then(|p| p.parse().ok()).unwrap_or(0);
 
-    let movies: Vec<Movie> = res.json().await?;
+            let items_per_page = 8;
+            let from = page * items_per_page;
+            let to = from + items_per_page - 1;
 
-    // In Vercel v2, simply return the json! macro result.
-    // The runtime automatically turns this into a 200 OK Response.
-    Ok(json!({
-        "movies": movies,
-        "total": total_count.parse::<usize>().unwrap_or(0)
-    }))
+            let mut target_url = format!("{}/rest/v1/movies?select=*", supabase_url);
+            if !search_term.is_empty() {
+                target_url.push_str(&format!("&title=ilike.*{}*", search_term));
+            }
+            target_url.push_str("&order=release_date.desc");
+
+            let res = client
+                .get(target_url)
+                .header("apikey", &supabase_key)
+                .header("Authorization", format!("Bearer {}", supabase_key))
+                .header("Range", format!("{}-{}", from, to))
+                .header("Prefer", "count=exact")
+                .send()
+                .await?;
+
+            let total_count = res
+                .headers()
+                .get("content-range")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.split('/').last())
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "0".to_string());
+
+            let movies: Vec<Movie> = res.json().await?;
+
+            Ok(json!({
+                "movies": movies,
+                "total": total_count.parse::<usize>().unwrap_or(0)
+            }))
+        }
+        Method::POST => {
+            let body_bytes = req
+                .into_body()
+                .collect()
+                .await?
+                .to_bytes();
+            let payload: MovieInput = match serde_json::from_slice(&body_bytes) {
+                Ok(data) => data,
+                Err(_) => {
+                    return Ok(json!({
+                        "error": "Invalid JSON payload."
+                    }));
+                }
+            };
+
+            let target_url = format!("{}/rest/v1/movies", supabase_url);
+            let res = client
+                .post(target_url)
+                .header("apikey", &supabase_key)
+                .header("Authorization", format!("Bearer {}", supabase_key))
+                .header("Prefer", "return=representation")
+                .json(&payload)
+                .send()
+                .await?;
+
+            if !res.status().is_success() {
+                let details = res.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                return Ok(json!({
+                    "error": "Supabase insert failed.",
+                    "details": details
+                }));
+            }
+
+            let created: Vec<Movie> = res.json().await.unwrap_or_default();
+            Ok(json!({
+                "movie": created.into_iter().next()
+            }))
+        }
+        Method::PATCH => {
+            let id = match query_parts.get("id") {
+                Some(value) if !value.is_empty() => value,
+                _ => {
+                    return Ok(json!({
+                        "error": "Missing id query parameter."
+                    }));
+                }
+            };
+
+            let body_bytes = req
+                .into_body()
+                .collect()
+                .await?
+                .to_bytes();
+            let payload: MovieUpdate = match serde_json::from_slice(&body_bytes) {
+                Ok(data) => data,
+                Err(_) => {
+                    return Ok(json!({
+                        "error": "Invalid JSON payload."
+                    }));
+                }
+            };
+
+            if payload.title.is_none()
+                && payload.tagline.is_none()
+                && payload.popularity.is_none()
+                && payload.release_date.is_none()
+            {
+                return Ok(json!({
+                    "error": "No fields provided for update."
+                }));
+            }
+
+            let target_url = format!("{}/rest/v1/movies?id=eq.{}", supabase_url, id);
+            let res = client
+                .patch(target_url)
+                .header("apikey", &supabase_key)
+                .header("Authorization", format!("Bearer {}", supabase_key))
+                .header("Prefer", "return=representation")
+                .json(&payload)
+                .send()
+                .await?;
+
+            if !res.status().is_success() {
+                let details = res.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                return Ok(json!({
+                    "error": "Supabase update failed.",
+                    "details": details
+                }));
+            }
+
+            let updated: Vec<Movie> = res.json().await.unwrap_or_default();
+            Ok(json!({
+                "movie": updated.into_iter().next()
+            }))
+        }
+        Method::DELETE => {
+            let id = match query_parts.get("id") {
+                Some(value) if !value.is_empty() => value,
+                _ => {
+                    return Ok(json!({
+                        "error": "Missing id query parameter."
+                    }));
+                }
+            };
+
+            let target_url = format!("{}/rest/v1/movies?id=eq.{}", supabase_url, id);
+            let res = client
+                .delete(target_url)
+                .header("apikey", &supabase_key)
+                .header("Authorization", format!("Bearer {}", supabase_key))
+                .send()
+                .await?;
+
+            if !res.status().is_success() {
+                let details = res.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                return Ok(json!({
+                    "error": "Supabase delete failed.",
+                    "details": details
+                }));
+            }
+
+            Ok(json!({
+                "status": "deleted"
+            }))
+        }
+        _ => Ok(json!({
+            "error": "Unsupported method."
+        })),
+    }
 }
