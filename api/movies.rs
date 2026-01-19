@@ -1,5 +1,5 @@
-use hyper::body::to_bytes;
-use hyper::Method;
+use http::Method;
+use http_body_util::BodyExt;
 use serde::Deserialize;
 use serde_json::{json, Value}; // JSON macro and type live here
 use std::env;
@@ -113,7 +113,11 @@ pub async fn handler(req: Request) -> Result<Value, Error> {
             }))
         }
         Method::POST => {
-            let body_bytes = to_bytes(req.into_body()).await?;
+            let body_bytes = req
+                .into_body()
+                .collect()
+                .await?
+                .to_bytes();
             let payload: MovieInput = match serde_json::from_slice(&body_bytes) {
                 Ok(data) => data,
                 Err(_) => {
@@ -156,7 +160,11 @@ pub async fn handler(req: Request) -> Result<Value, Error> {
                 }
             };
 
-            let body_bytes = to_bytes(req.into_body()).await?;
+            let body_bytes = req
+                .into_body()
+                .collect()
+                .await?
+                .to_bytes();
             let payload: MovieUpdate = match serde_json::from_slice(&body_bytes) {
                 Ok(data) => data,
                 Err(_) => {
